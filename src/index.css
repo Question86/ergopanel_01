@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dashboard Custom Style */
+body {
+  background: #181a23;
+}
