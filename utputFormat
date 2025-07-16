@@ -1,0 +1,11 @@
+HTTP/1.1 400 Bad Request
+Server: akka-http/10.2.4
+Date: Wed, 16 Jul 2025 14:28:07 GMT
+Content-Type: application/json
+Content-Length: 115
+
+{
+  "error" : 400,
+  "reason" : "bad.request",
+  "detail" : "The requested resource/endpoint could not be found."
+}

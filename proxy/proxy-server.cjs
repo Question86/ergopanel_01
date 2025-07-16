@@ -40,10 +40,16 @@ app.get('/proxy/ergowatch', async (req, res) => {
   }
   try {
     const response = await fetch(url);
+    const contentType = response.headers.get('content-type') || '';
     if (!response.ok) {
       const text = await response.text();
       console.error(`[Proxy][ErgoWatch] Upstream error: ${response.status} ${response.statusText} - ${text}`);
       return res.status(502).json({ error: `Upstream error: ${response.status} ${response.statusText}`, details: text });
+    }
+    if (!contentType.includes('application/json')) {
+      const rawText = await response.text();
+      console.error(`[Proxy][ErgoWatch] Upstream returned non-JSON content-type (${contentType}) for 200 response. Raw:`, rawText);
+      return res.status(502).json({ error: `Upstream returned non-JSON content-type (${contentType})`, details: rawText });
     }
     const data = await response.json();
     res.json(data);

@@ -1,3 +1,42 @@
+// Central address classifier: returns { type, label } for any address
+export function classifyAddress(address: string): { type: "Miner" | "Exchange" | "Privat" | "Emission", label: string } {
+  // Emission contract (hardcoded, should match ergoflow.ts)
+  const emissionAddress = "2Z4YBkDsDvQj8BX7xiySFewjitqp2ge9c99jfes2whbtKitZTxdBYqbrVZUvZvKv6aqn9by4kp3LE1c26LCyosFnVnm6b6U1JYvWpYmL2ZnixJbXLjWAWuBThV1D6dLpqZJYQHYDznJCk49g5TUiS4q8khpag2aNmHwREV7JSsypHdHLgJT7MGaw51aJfNubyzSKxZ4AJXFS27EfXwyCLzW1K6GVqwkJtCoPvrcLqmqwacAWJPkmh78nke9H4oT88XmSbRt2n9aWZjosiZCafZ4osUDxmZcc5QVEeTWn8drSraY3eFKe8Mu9MSCcVU";
+  if (address === emissionAddress) return { type: "Emission", label: "Emission" };
+  if (minerAddresses.includes(address)) {
+    const label = minerNameMap[address] || "Miner";
+    return { type: "Miner", label };
+  }
+  if (exchangeAddresses.includes(address)) return { type: "Exchange", label: "Exchange" };
+  return { type: "Privat", label: "Privat" };
+}
+// Map miner addresses to pool names
+export const minerNameMap: Record<string, string> = {
+  // 2 miners
+  "88dhgzEuTXaRQTX5KNdnaWTTX7fEZVEQRn6qP4MJotPuRnS3QpoJxYpSaXoU1y7SHp8ZXMp92TH22DBY": "2miners",
+  // 666 pool
+  "88dhgzEuTXaU9uJYAV8HTNzQL5pZrf7DovupdeBVm6msBjzLQjor8cp8DXaruQvyrAij6YxZAzzmbj8n": "666pool",
+  // DX pool
+  "88dhgzEuTXaUPpNAbKL7UeNUFEcjkoqW6ev5P1hkynBmG4L5baYdZ8rSPYCDNmvwBLiJR7ABjndPhqGm": "DXpool",
+  // Hero miner
+  "88dhgzEuTXaSuf5QC1TJDgdxqJMQEQAM6YaTTRqmUDrmPoVky1b16WAK5zMrq3p2mYqpUNKCyi5CLS9V": "HeroMiner",
+  // Jj pool
+  "88dhgzEuTXaS7z8MA868ZjU6ujmWi8Wqcx7VK36jcogWt8cRCKoGJYE6ezDe5g7f6fG7arqXNhuNP8Je": "JJPool",
+  // K1 pool
+  "88dhgzEuTXaTj2AZkM2vwnemCYyAUJymaFf8iJPUYmgLkJqQmPd3DTubYS5UfL75MhQbEjmuhBMbdspA": "K1Pool",
+  // Kryptex
+  "88dhgzEuTXaTnTZomXPfuJ67oYJPbrv17yNkLjN6Nj8HxZEUf2iAdiv9gTqmnKKa2i75zmUtDnPQovBb": "Kryptex",
+  // Magic pool
+  "88dhgzEuTXaTmFJfU5i58VVg6PRWfaAEWJ2qTgvVusnA2U1xw9NTsDYBpW4fTzkz2Cx7sGkQQYwnJ3xN": "MagicPool",
+  // Nano pool
+  "88dhgzEuTXaRp6WD5jWZSnXzBbA44g1xSMk6Xv2r6Cey8snSH78S6ZbWjP24yyPTDCCZByLpNXXe6NnN": "NanoPool",
+  // Solo pool
+  "88dhgzEuTXaRVtdXFwQFLD9NrGKjCP49pYiVAbptRRx9r4GbTmVZZYNDJGQ54AG4YjPpP5YkvvDUxBSd": "SoloPool",
+  // Sigmanaut
+  "88dhgzEuTXaQDYikoEkCMEPRxDiYnVRfiqhf3uLcMhbTPrTrrc7wkyF5LFMmgJyT4mPa6ucnmk3QTeUo": "Sigmanaut",
+  // Wooly pooly
+  "88dhgzEuTXaQ2HPUskY3hvgMA5uCbQWwZNPbMC1Hem9zM2V9U7KMah7LYWS4Hm4WECGuc22nofdQbHbY": "WoolyPooly",
+};
 // src/utils/knownAddresses.ts
 
 export const exchangeAddresses = [
