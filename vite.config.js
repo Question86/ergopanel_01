@@ -16,11 +16,15 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
-      '/proxy': {
-        target: 'http://localhost:5050', // Updated to match your running proxy server
+      '/api': {
+        target: 'http://localhost:5050',
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path.replace(/^\/proxy/, ''),
+      },
+      '/proxy': {
+        target: 'http://localhost:5050',
+        changeOrigin: true,
+        secure: false,
       },
     },
   },

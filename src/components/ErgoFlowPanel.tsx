@@ -1,7 +1,6 @@
-
 import React, { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
-import { fetchErgoFlow } from "../utils/ergoflow";
+// Remove direct node-based extraction logic. Use backend API route instead.
 import { exchangeAddresses, minerAddresses, minerNameMap } from "../utils/knownAddresses";
 
 // Map exchange addresses to names for display
@@ -77,18 +76,20 @@ export const ErgoFlowPanel: React.FC = () => {
   const seenFlows = useRef<Set<string>>(new Set());
 
 
-  // --- Passive Real Node Data Fetch Logic ---
+  // --- Fetch flows from backend API route using explorer data ---
   useEffect(() => {
     let cancelled = false;
-    let timeoutId: number;
-    const fetchAndSchedule = () => {
-      fetchErgoFlow()
+    let timeoutId: ReturnType<typeof setTimeout>;
+    // Fetch flows from API
+    const fetchFlows = () => {
+      fetch('/api/ergoflow-mirror')
+        .then(res => res.json())
         .then(data => {
           if (!cancelled) {
             setFlows(prev => {
               const seen = seenFlows.current;
               const newFlows = [...prev];
-              for (const flow of data) {
+              for (const flow of (data.flows || [])) {
                 const key = `${flow.fromAddress}-${flow.toAddress}-${flow.value}`;
                 if (!seen.has(key)) {
                   seen.add(key);
@@ -107,20 +108,25 @@ export const ErgoFlowPanel: React.FC = () => {
             setError(err.message || "Fehler");
             setLoading(false);
           }
-        })
-        .finally(() => {
-          if (!cancelled) {
-            timeoutId = setTimeout(fetchAndSchedule, 10000);
-          }
         });
     };
-    fetchAndSchedule();
+    // Poll every 2 minutes
+    const schedulePolling = () => {
+      fetchFlows();
+      timeoutId = setTimeout(schedulePolling, 120000);
+    };
+    schedulePolling();
+    // Listen for tab visibility change to trigger immediate refresh
+    const handleVisibility = () => {
+      if (!document.hidden) fetchFlows();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
       cancelled = true;
       if (timeoutId) clearTimeout(timeoutId);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
-
 
 
 
@@ -129,12 +135,13 @@ export const ErgoFlowPanel: React.FC = () => {
   if (!flows.length) return <div style={{ color: "yellow" }}>Keine Flows gefunden</div>;
 
 
-  // --- Neon Style Colors for Entities ---
+  // --- Neon Style Colors for Entities (less glow, more style) ---
   const entityColors: Record<string, string> = {
-    Miner: '#ffe066', // Gelb
-    Exchange: '#00bfff', // Blau
-    Private: '#00ff99', // Grün
-    Emission: '#ff6b6b', // Rot-Orange für Emission
+    Miner: '#ffe066', // Soft yellow
+    Exchange: '#00bfff', // Cyan blue
+    Private: '#00ff99', // Green
+    Emission: '#ff6b6b', // Red-orange
+    Contract: '#7f8cff', // Violet
   };
 
   // --- Emission Address ---
@@ -169,7 +176,8 @@ export const ErgoFlowPanel: React.FC = () => {
 
   // --- Build Entities from Flows ---
   // Each unique node key becomes a node
-  const nodeMap = new Map<string, { type: string, label: string, key: string }>();
+  type NodeType = { type: string, label: string, key: string, _gridX?: number, _gridY?: number };
+  const nodeMap = new Map<string, NodeType>();
   flows.forEach((flow: any) => {
     if (flow.fromAddress) {
       const c = getNodeKey(flow.fromAddress);
@@ -181,32 +189,39 @@ export const ErgoFlowPanel: React.FC = () => {
     }
   });
 
-  // --- Node Layout: emission left, miners middle-left, privates middle-right, exchanges right ---
+  // --- Node Layout: emission left, miners middle-left, privates spread, exchanges right ---
   const width = 640, height = 360;
   const centerY = height / 2;
   const margin = 40;
   const emissionX = margin;
-  const minerX = width * 0.25;
-  const privateX = width * 0.60;
+  const minerX = width * 0.20;
+  const privateMinerX = width * 0.35;
+  const privateExchangeX = width * 0.50;
   const exchangeX = width - margin;
 
   const nodes = Array.from(nodeMap.values());
   const emissionNode = nodes.find(n => n.type === 'Emission');
   const minerNodes = nodes.filter(n => n.type === 'Miner');
   const exchangeNodes = nodes.filter(n => n.type === 'Exchange');
-  const privateNodes = nodes.filter(n => n.type === 'Private');
+  const privateNodes: NodeType[] = nodes.filter(n => n.type === 'Private');
 
-  // Stack miners vertically on middle-left
+  // Stack miners vertically on left
   const minerYStep = minerNodes.length > 1 ? height / (minerNodes.length + 1) : 0;
-  // Stack privates vertically on middle-right
-  const privateYStep = privateNodes.length > 1 ? height / (privateNodes.length + 1) : 0;
   // Stack exchanges vertically on right
   const exchangeYStep = exchangeNodes.length > 1 ? height / (exchangeNodes.length + 1) : 0;
+  // Organize p2p nodes (green privates) in the middle, full height
+  const p2pNodes: NodeType[] = privateNodes.map(n => ({ ...n, label: 'p2p' }));
+  const p2pCount = p2pNodes.length;
+  const p2pX = width * 0.5;
+  const p2pTop = 32 + 24; // leave space for title/legend
+  const p2pBottom = height - 32;
+  const p2pYStep = p2pCount > 1 ? (p2pBottom - p2pTop) / (p2pCount - 1) : 0;
 
   const positionedNodes = [
     ...(emissionNode ? [{ ...emissionNode, x: emissionX, y: centerY }] : []),
     ...minerNodes.map((n, i) => ({ ...n, x: minerX, y: minerYStep * (i + 1) })),
-    ...privateNodes.map((n, i) => ({ ...n, x: privateX, y: privateYStep * (i + 1) })),
+    // p2p nodes centered horizontally, spread vertically
+    ...p2pNodes.map((n, i) => ({ ...n, x: p2pX, y: p2pCount > 1 ? p2pTop + i * p2pYStep : centerY })),
     ...exchangeNodes.map((n, i) => ({ ...n, x: exchangeX, y: exchangeYStep * (i + 1) })),
   ];
 
@@ -222,14 +237,13 @@ export const ErgoFlowPanel: React.FC = () => {
   let fullscreenStyle = {};
   if (fullscreen && panelRect) {
     if (animating) {
-      // Start at original rect, animate to fullscreen
       fullscreenStyle = {
         position: 'fixed',
         left: panelRect.left,
         top: panelRect.top,
         width: panelRect.width,
         height: panelRect.height,
-        boxShadow: '0 0 24px #00fff7, 0 0 2px #0ff inset',
+        boxShadow: '0 0 8px #00fff7, 0 0 1px #0ff inset',
         cursor: 'zoom-out',
         zIndex: 10001,
         transition: 'all 0.3s cubic-bezier(.4,2,.6,1)',
@@ -249,7 +263,7 @@ export const ErgoFlowPanel: React.FC = () => {
         top: '2vh',
         width: '96vw',
         height: '96vh',
-        boxShadow: '0 0 24px #00fff7, 0 0 2px #0ff inset',
+        boxShadow: '0 0 8px #00fff7, 0 0 1px #0ff inset',
         cursor: 'zoom-out',
         zIndex: 10001,
         transition: 'all 0.3s cubic-bezier(.4,2,.6,1)',
@@ -269,7 +283,7 @@ export const ErgoFlowPanel: React.FC = () => {
       onClick={handlePanelClick}
     >
       <svg width="100%" height="100%" viewBox="0 0 640 360" style={{ position: 'absolute', top: 0, left: 0 }}>
-        {/* Flows (Lines) */}
+        {/* Flows (Curved Lines) */}
         {(() => {
           // Find min/max value for scaling
           let minValue = Infinity, maxValue = -Infinity;
@@ -278,13 +292,11 @@ export const ErgoFlowPanel: React.FC = () => {
             if (v < minValue) minValue = v;
             if (v > maxValue) maxValue = v;
           });
-          // Avoid degenerate case
           if (!isFinite(minValue) || !isFinite(maxValue) || minValue === maxValue) {
             minValue = 1; maxValue = 10;
           }
-          const minThick = 2, maxThick = 12;
+          const minThick = 1.2, maxThick = 5.5;
           function scaleThickness(v: number) {
-            // Linear scale
             return minThick + ((v - minValue) / (maxValue - minValue)) * (maxThick - minThick);
           }
           return flows.map((flow: any, idx: number) => {
@@ -293,77 +305,163 @@ export const ErgoFlowPanel: React.FC = () => {
             if (!from || !to) return null;
             const v = flow.value || flow.amount || 1;
             const thickness = scaleThickness(v);
-            const glow = entityColors[from.type] || '#fff';
-            // Unique class for each line color
-            const lineClass = `ergo-flow-animated-glow-${from.type.toLowerCase()}`;
-            // Use a unique key for each line
+            const color = entityColors[from.type] || '#fff';
+            // Use a cubic Bezier for smooth curves
+            const dx = to.x - from.x;
+            const dy = to.y - from.y;
+            const curve = Math.abs(dx) * 0.25;
+            const c1x = from.x + curve;
+            const c1y = from.y;
+            const c2x = to.x - curve;
+            const c2y = to.y;
             const key = flow.txId || `${flow.fromAddress}-${flow.toAddress}-${flow.value}-${idx}`;
             return (
-              <React.Fragment key={key}>
-                <style>{`
-                  .${lineClass} {
-                    stroke-linecap: round;
-                    animation: flow-glow-${from.type.toLowerCase()} 2s linear infinite;
-                  }
-                  @keyframes flow-glow-${from.type.toLowerCase()} {
-                    0% { filter: drop-shadow(0 0 2px ${glow}) drop-shadow(0 0 4px ${glow}); }
-                    50% { filter: drop-shadow(0 0 4px #fff) drop-shadow(0 0 8px ${glow}); }
-                    100% { filter: drop-shadow(0 0 2px ${glow}) drop-shadow(0 0 4px ${glow}); }
-                  }
-                `}</style>
-                <line
-                  x1={from.x}
-                  y1={from.y}
-                  x2={to.x}
-                  y2={to.y}
-                  stroke={glow}
-                  strokeWidth={thickness}
-                  opacity={0.7}
-                  style={{ opacity: 0.55 }}
-                  className={lineClass}
-                />
-              </React.Fragment>
+              <path
+                key={key}
+                d={`M${from.x},${from.y} C${c1x},${c1y} ${c2x},${c2y} ${to.x},${to.y}`}
+                stroke={color}
+                strokeWidth={thickness}
+                fill="none"
+                opacity={0.55}
+                style={{ filter: `drop-shadow(0 0 2px ${color})` }}
+              />
             );
           });
         })()}
         {/* Entities (Nodes) */}
-        {positionedNodes.map((e) => (
-          <g key={e.key}>
-            <circle
-              cx={e.x}
-              cy={e.y}
-              r={28}
-              fill="#181c24"
-              stroke={entityColors[e.type]}
-              strokeWidth={3}
-              style={{ filter: `drop-shadow(0 0 12px ${entityColors[e.type]})` }}
-            />
-            <text
-              x={e.x}
-              y={e.y + 5}
-              textAnchor="middle"
-              fontSize={15}
-              fill={entityColors[e.type]}
-              style={{ textShadow: `0 0 8px ${entityColors[e.type]}` }}
-              fontWeight="bold"
-            >
-              {e.label}
-            </text>
-          </g>
-        ))}
+        {positionedNodes.map((e) => {
+          // Exchange: rounded rectangle, Miner: circle, Emission: hexagon, Private: small circle
+          if (e.type === 'Exchange') {
+            return (
+              <g key={e.key}>
+                <rect
+                  x={e.x - 18}
+                  y={e.y - 12}
+                  rx={10}
+                  ry={10}
+                  width={36}
+                  height={24}
+                  fill="#181c24"
+                  stroke={entityColors[e.type]}
+                  strokeWidth={2.5}
+                  style={{ filter: `drop-shadow(0 0 4px ${entityColors[e.type]})` }}
+                />
+                <text
+                  x={e.x}
+                  y={e.y + 5}
+                  textAnchor="middle"
+                  fontSize={15}
+                  fill={entityColors[e.type]}
+                  fontWeight="bold"
+                  style={{ textShadow: `0 0 2px ${entityColors[e.type]}` }}
+                >
+                  {e.label}
+                </text>
+              </g>
+            );
+          }
+          if (e.type === 'Emission') {
+            // Hexagon
+            const r = 16;
+            const points = Array.from({length: 6}, (_, i) => {
+              const angle = Math.PI / 3 * i;
+              return `${e.x + r * Math.cos(angle)},${e.y + r * Math.sin(angle)}`;
+            }).join(' ');
+            return (
+              <g key={e.key}>
+                <polygon
+                  points={points}
+                  fill="#181c24"
+                  stroke={entityColors[e.type]}
+                  strokeWidth={2.5}
+                  style={{ filter: `drop-shadow(0 0 4px ${entityColors[e.type]})` }}
+                />
+                <text
+                  x={e.x}
+                  y={e.y + 6}
+                  textAnchor="middle"
+                  fontSize={15}
+                  fill={entityColors[e.type]}
+                  fontWeight="bold"
+                  style={{ textShadow: `0 0 2px ${entityColors[e.type]}` }}
+                >
+                  {e.label}
+                </text>
+              </g>
+            );
+          }
+          if (e.type === 'Miner') {
+            return (
+              <g key={e.key}>
+                <circle
+                  cx={e.x}
+                  cy={e.y}
+                  r={14}
+                  fill="#181c24"
+                  stroke={entityColors[e.type]}
+                  strokeWidth={2.5}
+                  style={{ filter: `drop-shadow(0 0 4px ${entityColors[e.type]})` }}
+                />
+                <text
+                  x={e.x}
+                  y={e.y + 5}
+                  textAnchor="middle"
+                  fontSize={15}
+                  fill={entityColors[e.type]}
+                  fontWeight="bold"
+                  style={{ textShadow: `0 0 2px ${entityColors[e.type]}` }}
+                >
+                  {e.label}
+                </text>
+              </g>
+            );
+          }
+          // Private: small circle, labeled 'p2p'
+          return (
+            <g key={e.key}>
+              <circle
+                cx={e.x}
+                cy={e.y}
+                r={8}
+                fill="#181c24"
+                stroke={entityColors[e.type]}
+                strokeWidth={2}
+                style={{ filter: `drop-shadow(0 0 2px ${entityColors[e.type]})` }}
+              />
+              <text
+                x={e.x}
+                y={e.y + 4}
+                textAnchor="middle"
+                fontSize={12}
+                fill={entityColors[e.type]}
+                fontWeight="bold"
+                style={{ textShadow: `0 0 1px ${entityColors[e.type]}` }}
+              >
+                {e.label}
+              </text>
+            </g>
+          );
+        })}
       </svg>
-      <div className="absolute left-4 top-4 text-cyan-300 font-bold text-lg tracking-wide drop-shadow-glow flex items-center gap-2">
-        Ergo Flow
+      <div className="absolute left-4 top-4 text-cyan-300 font-bold text-xl tracking-wide flex items-center gap-2" style={{letterSpacing: '0.08em', textShadow: '0 0 8px #00bfff'}}>
+        TRANSACTIONS BETWEEN
       </div>
-      <style>{`
-      /* Per-line glow keyframes are injected inline above */
-      `}</style>
-      {/* Legend at bottom, horizontal */}
-      <div className="absolute left-0 right-0 bottom-2 flex flex-row justify-center gap-6 text-xs">
+      {/* Legend at right, vertical */}
+      <div className="absolute right-8 top-16 flex flex-col gap-3 text-xs items-start" style={{background: 'rgba(16,19,26,0.85)', borderRadius: '12px', padding: '18px 18px 18px 24px', boxShadow: '0 0 12px #10131a'}}>
         {Object.entries(entityColors).map(([type, color]) => (
-          <div key={type} className="flex items-center gap-1">
-            <span style={{ background: color, width: 12, height: 12, borderRadius: 6, display: 'inline-block', boxShadow: `0 0 8px ${color}` }}></span>
-            <span className="text-cyan-100" style={{ color }}>{type}</span>
+          <div key={type} className="flex items-center gap-2">
+            {type === 'Exchange' ? (
+              <span style={{ background: color, width: 24, height: 16, borderRadius: 8, display: 'inline-block', boxShadow: `0 0 4px ${color}` }}></span>
+            ) : type === 'Emission' ? (
+              <span style={{ width: 18, height: 18, display: 'inline-block', background: 'none', borderRadius: 0 }}>
+                <svg width="18" height="18" viewBox="0 0 18 18"><polygon points="9,2 16,6.5 16,13.5 9,17 2,13.5 2,6.5" fill={color} /></svg>
+              </span>
+            ) : type === 'Miner' ? (
+              <span style={{ background: color, width: 18, height: 18, borderRadius: 9, display: 'inline-block', boxShadow: `0 0 4px ${color}` }}></span>
+            ) : (
+              <span style={{ background: color, width: 12, height: 12, borderRadius: 6, display: 'inline-block', boxShadow: `0 0 2px ${color}` }}></span>
+            )}
+            <span className="text-cyan-100" style={{ color, fontWeight: 'bold', fontSize: '1em', textShadow: `0 0 2px ${color}` }}>{type}</span>
           </div>
         ))}
       </div>

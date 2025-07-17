@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "chart.js": "^4.5.0",
+    "cors": "^2.8.5",
     "ergo-lib-wasm-browser": "^0.28.0",
     "express": "^5.1.0",
     "framer-motion": "^12.23.5",

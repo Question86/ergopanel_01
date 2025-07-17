@@ -32,74 +32,42 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 }
 // Main function to fetch and classify flows
 export async function fetchErgoFlow(): Promise<TxFlow[]> {
-  // 1. Fetch recent block IDs from node
-  const blockIdsRes = await fetch("/blocks?limit=500");
-  const blockIds: string[] = await blockIdsRes.json();
-  console.log(`[ErgoFlow] Block IDs fetched:`, blockIds.length);
+  const explorerApi = "https://api.ergoplatform.com/api/v1";
+  // 1. Fetch recent block IDs from explorer
+  const blockIdsRes = await fetch(`${explorerApi}/blocks?limit=100`);
+  const blockData = await blockIdsRes.json();
+  const blockIds: string[] = blockData.items.map((b: any) => b.id);
 
   // 2. Fetch full block details for each block ID
   const blocks: any[] = [];
   for (const blockId of blockIds) {
     try {
-      const blockRes = await fetch(`/blocks/${blockId}`);
+      const blockRes = await fetch(`${explorerApi}/blocks/${blockId}`);
       if (blockRes.ok) {
-        const blockData = await blockRes.json();
-        blocks.push(blockData);
-      } else {
-        console.warn(`[ErgoFlow] Failed to fetch block ${blockId}: ${blockRes.status}`);
+        const blockDetail = await blockRes.json();
+        blocks.push(blockDetail);
       }
     } catch (err) {
-      console.warn(`[ErgoFlow] Error fetching block ${blockId}:`, err);
+      // Ignore errors for missing blocks
     }
   }
-  console.log(`[ErgoFlow] Full blocks fetched:`, blocks.length);
 
   // 3. Build boxId -> address map from outputs
   const boxAddrMap: Record<string, string> = {};
-  let txCount = 0, inputCount = 0;
   for (const block of blocks) {
-    const txs = Array.isArray(block.blockTransactions)
-      ? block.blockTransactions
-      : (block.blockTransactions && Array.isArray(block.blockTransactions.transactions))
-        ? block.blockTransactions.transactions
-        : [];
-    for (const tx of txs) {
-      txCount++;
+    for (const tx of block.transactions || []) {
       for (const output of tx.outputs || []) {
         if (output.boxId && output.address) {
           boxAddrMap[output.boxId] = output.address;
-          console.debug(`[ErgoFlow][DEBUG] Output: boxId=${output.boxId} address=${output.address}`);
-        } else if (output.boxId) {
-          console.debug(`[ErgoFlow][DEBUG] Output: boxId=${output.boxId} has NO address field`);
-        }
-      }
-      for (const input of tx.inputs || []) {
-        inputCount++;
-        if (input.boxId) {
-          const resolved = boxAddrMap[input.boxId];
-          if (resolved) {
-            console.debug(`[ErgoFlow][DEBUG] Input: boxId=${input.boxId} resolved address=${resolved}`);
-          } else {
-            console.debug(`[ErgoFlow][DEBUG] Input: boxId=${input.boxId} address NOT FOUND in local map`);
-          }
         }
       }
     }
   }
 
-  // 3. Log dynamic miner addresses for debugging
-  console.log(`[ErgoFlow] Dynamic miner addresses from emission contract:`, Array.from(dynamicMinerAddresses));
-  console.log(`[ErgoFlow] Transactions: ${txCount}, Inputs: ${inputCount}, Output boxIds mapped: ${Object.keys(boxAddrMap).length}`);
-
-  // 4. Resolve input addresses using local boxAddrMap
+  // 4. Resolve input addresses using explorer API for missing boxIds
   const allInputBoxIds: string[] = [];
   for (const block of blocks) {
-    const txs = Array.isArray(block.blockTransactions)
-      ? block.blockTransactions
-      : (block.blockTransactions && Array.isArray(block.blockTransactions.transactions))
-        ? block.blockTransactions.transactions
-        : [];
-    for (const tx of txs) {
+    for (const tx of block.transactions || []) {
       for (const input of tx.inputs || []) {
         if (input.boxId) allInputBoxIds.push(input.boxId);
       }
@@ -108,122 +76,51 @@ export async function fetchErgoFlow(): Promise<TxFlow[]> {
   const missingInputBoxIds = allInputBoxIds.filter(boxId => !boxAddrMap[boxId]);
   let fetchedAddrMap: Record<string, string> = {};
   if (missingInputBoxIds.length > 0) {
-    fetchedAddrMap = await fetchBoxAddresses(missingInputBoxIds);
+    for (const boxId of missingInputBoxIds) {
+      try {
+        const boxRes = await fetch(`${explorerApi}/boxes/${boxId}`);
+        if (boxRes.ok) {
+          const boxDetail = await boxRes.json();
+          if (boxDetail.address) {
+            fetchedAddrMap[boxId] = boxDetail.address;
+          }
+        }
+      } catch (err) {
+        // Ignore errors for missing boxes
+      }
+    }
   }
 
-  // 5. Flows berechnen
+  // 5. Build flows
   let flows: TxFlow[] = [];
-  let blockFlowCount = 0;
   for (const block of blocks) {
-    const txs = Array.isArray(block.blockTransactions)
-      ? block.blockTransactions
-      : (block.blockTransactions && Array.isArray(block.blockTransactions.transactions))
-        ? block.blockTransactions.transactions
-        : [];
-    for (const tx of txs) {
+    for (const tx of block.transactions || []) {
       for (const input of tx.inputs || []) {
-        let fromAddr = boxAddrMap[input.boxId] || fetchedAddrMap[input.boxId];
-        if (!fromAddr) {
-          fromAddr = "Unknown";
-          // Optionally log: console.warn(`[ErgoFlow] Input boxId ${input.boxId} unresolved, using 'Unknown'`);
-        }
+        let fromAddr = boxAddrMap[input.boxId] || fetchedAddrMap[input.boxId] || "Unknown";
         for (const output of tx.outputs || []) {
           let toAddr = output.address;
-          if (!toAddr && typeof output.ergoTree === 'string') {
-            try {
-              const tree = ergoLib.ErgoTree.from_base16_bytes(output.ergoTree);
-              toAddr = ergoLib.Address.recreate_from_ergo_tree(tree).to_base58(ergoLib.NetworkPrefix.Mainnet);
-              console.log(`[ErgoFlow] Decoded output address from ergoTree: ${toAddr}`);
-            } catch (e) {
-              // Could not decode
-            }
-          }
-          if (!toAddr) {
-            console.warn(`[ErgoFlow] Skipping output (no address field and could not decode):`, output);
-            continue;
-          }
-          // Dynamically classify miner addresses
-          let toType: "Miner" | "Exchange" | "Privat" | "Emission" = "Privat";
-          let toLabel = "Privat";
-          if (fromAddr === emissionAddress) {
-            toType = "Miner";
-            toLabel = "Miner (dynamic)";
-            dynamicMinerAddresses.add(toAddr);
-          } else if (toAddr.startsWith('88dhg')) {
-            toType = "Miner";
-            toLabel = "Miner (88dhg prefix)";
-          } else if (exchangeAddresses.includes(toAddr)) {
-            toType = "Exchange";
-            toLabel = "Exchange";
-          }
-          // Use classifyAddress for fromAddr
+          if (!toAddr) continue;
           const fromClass = classifyAddress(fromAddr);
-          // Print debug info
-          console.log(`[ErgoFlow][CLASSIFY] fromAddr: '${fromAddr}' => type: ${fromClass.type}, label: ${fromClass.label}`);
-          console.log(`[ErgoFlow][CLASSIFY] toAddr:   '${toAddr}' => type: ${toType}, label: ${toLabel}`);
+          const toClass = classifyAddress(toAddr);
           if (fromAddr !== toAddr) {
             flows.push({
               fromAddress: fromAddr,
               toAddress: toAddr,
-              fromType: fromClass.type,
-              toType,
-              fromLabel: fromClass.label,
-              toLabel,
-              value: Math.round((output.value ?? 0) / 1e9 * 1000) / 1000,
-            });
-            blockFlowCount++;
-          }
-        }
-      }
-    }
-  }
-  console.log(`[ErgoFlow] Flows from blocks: ${blockFlowCount}`);
-
-  // 6. Mempool genauso behandeln, aber da stehen oft noch Adressen direkt drin!
-  let mempoolFlowCount = 0;
-  try {
-    const memRes = await fetch("/transactions/unconfirmed");
-    const memTxs = await memRes.json();
-    for (const tx of memTxs || []) {
-      for (const input of tx.inputs || []) {
-        const fromAddr = input.address || "";
-        for (const output of tx.outputs || []) {
-          if (fromAddr && output.address && fromAddr !== output.address) {
-            const fromClass = classifyAddress(fromAddr);
-            const toClass = classifyAddress(output.address);
-            flows.push({
-              fromAddress: fromAddr,
-              toAddress: output.address,
               fromType: fromClass.type,
               toType: toClass.type,
               fromLabel: fromClass.label,
               toLabel: toClass.label,
               value: Math.round((output.value ?? 0) / 1e9 * 1000) / 1000,
             });
-            mempoolFlowCount++;
           }
         }
       }
     }
-    console.log(`[ErgoFlow] Flows from mempool: ${mempoolFlowCount}`);
-  } catch (e) {
-    // Mempool ist optional, ignoriere Fehler
-    console.warn("Konnte Mempool nicht laden", e);
   }
-
-  console.log(`[ErgoFlow] Total flows returned: ${flows.length}`);
   return flows;
 }
-
-// Lädt für eine Liste von boxIds die ursprünglichen Output-Adressen nach (nur Node-API, keine Explorer-Fallback)
-async function fetchBoxAddresses(boxIds: string[], throttleMs = 60): Promise<Record<string, string>> {
-  // Log the entire ergoLib object for debugging
-  console.log('[ErgoFlow] ergoLib exports:', Object.keys(ergoLib));
-  const addrMap: Record<string, string> = {};
-  // Node does not return box details for spent boxes, only IDs. Cannot resolve addresses this way.
-  // Only use local boxId → address map built from recent blocks.
-  // This function now does nothing and returns an empty map.
-  return {};
-  return addrMap;
-}
-  // Debug logging must be inside fetchErgoFlow, after flows is constructed and before return
+// 6. Fetch mempool transactions
+/*
+  // Mempool fetching is not implemented because the explorer API does not provide mempool access.
+  // If mempool support is needed in the future, consider using a node API or a different data source.
+*/
